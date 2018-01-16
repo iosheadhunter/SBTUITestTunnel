@@ -33,12 +33,14 @@ const NSString *SBTUITunnelJsonMimeType = @"application/json";
 @interface SBTUITunneledApplication() <NSNetServiceDelegate>
 
 @property (nonatomic, assign) NSInteger connectionPort;
+@property (nonatomic, assign) BOOL connected;
 @property (nonatomic, assign) NSTimeInterval connectionTimeout;
 @property (nonatomic, strong) NSMutableArray *stubOnceIds;
 @property (nonatomic, strong) NSString *bonjourName;
 @property (nonatomic, strong) NSNetService *bonjourBrowser;
 @property (nonatomic, strong) void (^startupBlock)(void);
-@property (nonatomic, strong) dispatch_semaphore_t startupSemaphore;
+@property (nonatomic, copy) NSArray <NSString *> *initialLaunchArguments;
+@property (nonatomic, copy) NSDictionary <NSString *, NSString *> *initialLaunchEnvironment;
 
 @end
 
@@ -51,23 +53,35 @@ static NSTimeInterval SBTUITunneledApplicationDefaultTimeout = 30.0;
     self = [super init];
     
     if (self) {
-        _connectionPort = 0;
-        _connectionTimeout = SBTUITunneledApplicationDefaultTimeout;
-        _bonjourName = [NSString stringWithFormat:@"com.subito.test.%d.%.0f", [NSProcessInfo processInfo].processIdentifier, (double)(CFAbsoluteTimeGetCurrent() * 100000)];
-        _bonjourBrowser = [[NSNetService alloc] initWithDomain:@"local." type:@"_http._tcp." name:_bonjourName];
-        _bonjourBrowser.delegate = self;
-        _startupSemaphore = dispatch_semaphore_create(0);
+        _initialLaunchArguments = self.launchArguments;
+        _initialLaunchEnvironment = self.launchEnvironment;
+        
+        [self resetInternalState];
     }
     
     return self;
 }
 
+- (void)resetInternalState
+{
+    [self.bonjourBrowser stop];
+
+    self.launchArguments = self.initialLaunchArguments;
+    self.launchEnvironment = self.initialLaunchEnvironment;
+
+    self.bonjourName = [NSString stringWithFormat:@"com.subito.test.%d.%.0f", [NSProcessInfo processInfo].processIdentifier, (double)(CFAbsoluteTimeGetCurrent() * 100000)];
+    self.bonjourBrowser = [[NSNetService alloc] initWithDomain:@"local." type:@"_http._tcp." name:self.bonjourName];
+    self.bonjourBrowser.delegate = self;
+    self.connected = NO;
+    self.connectionPort = 0;
+    self.connectionTimeout = SBTUITunneledApplicationDefaultTimeout;
+}
+
 - (void)terminate
 {
-    self.launchArguments = @[];
-    self.launchEnvironment = @{};
-    
     [self sendSynchronousRequestWithPath:SBTUITunneledApplicationCommandShutDown params:nil assertOnError:NO];
+    
+    [self resetInternalState];
     
     [super terminate];
 }
@@ -100,7 +114,7 @@ static NSTimeInterval SBTUITunneledApplicationDefaultTimeout = 30.0;
     launchEnvironment[SBTUITunneledApplicationLaunchEnvironmentBonjourNameKey] = self.bonjourName;
     self.launchEnvironment = launchEnvironment;
     
-    NSLog(@"[SBTUITestTunnel] resolving bonjour service %@", self.bonjourName);
+    NSLog(@"[SBTUITestTunnel] Resolving bonjour service %@", self.bonjourName);
     [self.bonjourBrowser resolveWithTimeout:self.connectionTimeout];
     
     [self launch];
@@ -119,7 +133,7 @@ static NSTimeInterval SBTUITunneledApplicationDefaultTimeout = 30.0;
         [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:1.0]];
     }
     
-    NSAssert(NO, @"[SBTUITestTunnel] failed waiting app to be ready");
+    NSAssert(NO, @"[SBTUITestTunnel] Failed waiting app to be ready");
     [self terminate];
 }
 
@@ -127,10 +141,12 @@ static NSTimeInterval SBTUITunneledApplicationDefaultTimeout = 30.0;
 
 - (void)netServiceDidResolveAddress:(NSNetService *)service;
 {
-    if ([service.name isEqualToString:self.bonjourName]) {
+    if ([service.name isEqualToString:self.bonjourName] && !self.connected) {
         NSAssert(service.port > 0, @"[SBTUITestTunnel] unexpected port 0!");
         
-        NSLog(@"[SBTUITestTunnel] tunnel established on port %ld", service.port);
+        self.connected = YES;
+        
+        NSLog(@"[SBTUITestTunnel] Tunnel established on port %ld", (unsigned long)service.port);
         self.connectionPort = service.port;
         
         if (self.startupBlock) {
@@ -143,7 +159,11 @@ static NSTimeInterval SBTUITunneledApplicationDefaultTimeout = 30.0;
 
 - (void)netService:(NSNetService *)sender didNotResolve:(NSDictionary<NSString *,NSNumber *> *)errorDict
 {
-    NSAssert(NO, @"[SBTUITestTunnel] failed to connect to client app.");
+    if (!self.connected || ![sender.name isEqualToString:self.bonjourName]) {
+        return;
+    }
+    
+    NSAssert(NO, @"[SBTUITestTunnel] Failed to connect to client app %@", errorDict);
     [self terminate];
 }
 
@@ -151,7 +171,7 @@ static NSTimeInterval SBTUITunneledApplicationDefaultTimeout = 30.0;
 
 + (void)setConnectionTimeout:(NSTimeInterval)timeout
 {
-    NSAssert(timeout > 5.0, @"[SBTUITestTunnel] timeout too short!");
+    NSAssert(timeout > 5.0, @"[SBTUITestTunnel] Timeout too short!");
     SBTUITunneledApplicationDefaultTimeout = timeout;
 }
 
@@ -175,7 +195,6 @@ static NSTimeInterval SBTUITunneledApplicationDefaultTimeout = 30.0;
 {
     return [[self sendSynchronousRequestWithPath:SBTUITunneledApplicationCommandCruising params:nil] isEqualToString:@"YES"];
 }
-
 
 #pragma mark - Stub Commands
 
@@ -291,7 +310,7 @@ static NSTimeInterval SBTUITunneledApplicationDefaultTimeout = 30.0;
 - (void)waitForMonitoredRequestsMatching:(SBTRequestMatch *)match timeout:(NSTimeInterval)timeout iterations:(NSUInteger)iterations completionBlock:(void (^)(BOOL timeout))completionBlock;
 {
     [self waitForMonitoredRequestsWithMatchingBlock:^BOOL(SBTMonitoredNetworkRequest *request) {
-        return [request.request matches:match];
+        return [request matches:match];
     } timeout:timeout iterations:iterations completionBlock:completionBlock];
 }
 
@@ -432,43 +451,6 @@ static NSTimeInterval SBTUITunneledApplicationDefaultTimeout = 30.0;
 - (BOOL)userDefaultsReset
 {
     return [[self sendSynchronousRequestWithPath:SBTUITunneledApplicationCommandNSUserDefaultsReset params:nil] boolValue];
-}
-
-#pragma mark - Keychain Commands
-
-- (BOOL)keychainSetObject:(id)object forKey:(NSString *)key
-{
-    NSDictionary<NSString *, NSString *> *params = @{SBTUITunnelObjectKeyKey: key,
-                                                     SBTUITunnelObjectKey: [self base64SerializeObject:object]};
-    
-    return [[self sendSynchronousRequestWithPath:SBTUITunneledApplicationCommandKeychainSetObject params:params] boolValue];
-}
-
-- (BOOL)keychainRemoveObjectForKey:(NSString *)key
-{
-    NSDictionary<NSString *, NSString *> *params = @{SBTUITunnelObjectKeyKey: key};
-    
-    return [[self sendSynchronousRequestWithPath:SBTUITunneledApplicationCommandKeychainRemoveObject params:params] boolValue];
-}
-
-- (id)keychainObjectForKey:(NSString *)key
-{
-    NSDictionary<NSString *, NSString *> *params = @{SBTUITunnelObjectKeyKey: key};
-    
-    NSString *objectBase64 = [self sendSynchronousRequestWithPath:SBTUITunneledApplicationCommandKeychainObject params:params];
-    
-    if (objectBase64) {
-        NSData *objectData = [[NSData alloc] initWithBase64EncodedString:objectBase64 options:0];
-        
-        return [NSKeyedUnarchiver unarchiveObjectWithData:objectData];
-    }
-    
-    return nil;
-}
-
-- (BOOL)keychainReset
-{
-    return [[self sendSynchronousRequestWithPath:SBTUITunneledApplicationCommandKeychainReset params:nil] boolValue];
 }
 
 #pragma mark - NSBundle

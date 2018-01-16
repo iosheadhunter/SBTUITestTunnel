@@ -191,6 +191,7 @@ class MonitorTests: XCTestCase {
         
         let requests = app.monitoredRequestsFlushAll()
         XCTAssertEqual(requests.count, 1)
+        print(requests.map { $0.debugDescription })
         
         for request in requests {
             guard let httpBody = request.request?.httpBody else {
@@ -344,6 +345,16 @@ class MonitorTests: XCTestCase {
         }
         
         XCTAssertFalse(app.waitForMonitoredRequests(matching: SBTRequestMatch(url: "httpbin.org"), timeout: 5.0, iterations: 2))
+    }
+    
+    func testRedictForMonitoredRequestShouldMatch() {
+        let redirectMatch = SBTRequestMatch(url: "httpbin.org")
+        app.monitorRequests(matching: redirectMatch)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.app.cells["executeRequestWithRedirect"].tap()
+        }
+        
+        XCTAssert(app.waitForMonitoredRequests(matching: redirectMatch, timeout: 115.0, iterations: 1))
     }
 }
 

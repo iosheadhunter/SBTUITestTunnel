@@ -15,9 +15,9 @@
 // limitations under the License.
 
 #if DEBUG
-    #ifndef ENABLE_UITUNNEL 
-        #define ENABLE_UITUNNEL 1
-    #endif
+#ifndef ENABLE_UITUNNEL
+#define ENABLE_UITUNNEL 1
+#endif
 #endif
 
 #if ENABLE_UITUNNEL
@@ -33,7 +33,6 @@
 #import <GCDWebServer/GCDWebServerURLEncodedFormRequest.h>
 #import <GCDWebServer/GCDWebServerDataResponse.h>
 #import "NSData+SHA1.h"
-#import <FXKeyChain/FXKeyChain.h>
 #import <CoreLocation/CoreLocation.h>
 
 #if !defined(NS_BLOCK_ASSERTIONS)
@@ -73,14 +72,16 @@ description:(desc), ##__VA_ARGS__]; \
 @property (nonatomic, strong) NSCountedSet<NSString *> *stubsToRemoveAfterCount;
 @property (nonatomic, strong) NSMutableArray<SBTMonitoredNetworkRequest *> *monitoredRequests;
 @property (nonatomic, strong) dispatch_queue_t commandDispatchQueue;
-@property (nonatomic, strong) NSLock *startupCommandsCompletedLock;
-@property (nonatomic, assign) BOOL startupCommandsCompleted;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, void (^)(NSObject *)> *customCommands;
 @property (nonatomic, assign) BOOL cruising;
+
+@property (nonatomic, strong) dispatch_semaphore_t launchSemaphore;
 
 @end
 
 @implementation SBTUITestTunnelServer
+
+static NSTimeInterval SBTUITunneledServerDefaultTimeout = 60.0;
 
 + (SBTUITestTunnelServer *)sharedInstance
 {
@@ -92,9 +93,8 @@ description:(desc), ##__VA_ARGS__]; \
         sharedInstance.stubsToRemoveAfterCount = [NSCountedSet set];
         sharedInstance.monitoredRequests = [NSMutableArray array];
         sharedInstance.commandDispatchQueue = dispatch_queue_create("com.sbtuitesttunnel.queue.command", DISPATCH_QUEUE_SERIAL);
-        sharedInstance.startupCommandsCompletedLock = [[NSLock alloc] init];
-        sharedInstance.startupCommandsCompleted = NO;
         sharedInstance.cruising = YES;
+        sharedInstance.launchSemaphore = dispatch_semaphore_create(0);
     });
     return sharedInstance;
 }
@@ -124,25 +124,25 @@ description:(desc), ##__VA_ARGS__]; \
     
     __weak typeof(self) weakSelf = self;
     [self.server addDefaultHandlerForMethod:SBTUITunnelHTTPMethod requestClass:requestClass processBlock:^GCDWebServerResponse *(GCDWebServerRequest* request) {
+        __strong typeof(weakSelf)strongSelf = weakSelf;
         __block GCDWebServerDataResponse *ret;
         
         dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-        dispatch_async(weakSelf.commandDispatchQueue, ^{
-            __strong typeof(weakSelf)strongSelf = weakSelf;
-            // NSLog(@"[UITestTunnelServer] received command %@", request.path);
-            
+        dispatch_async(strongSelf.commandDispatchQueue, ^{
             NSString *command = [request.path stringByReplacingOccurrencesOfString:@"/" withString:@""];
             
             NSString *commandString = [command stringByAppendingString:@":"];
             SEL commandSelector = NSSelectorFromString(commandString);
             NSDictionary *response = nil;
             
-            if (![weakSelf processCustomCommandIfNecessary:request returnObject:&response]) {
+            if (![strongSelf processCustomCommandIfNecessary:request returnObject:&response]) {
                 if (![strongSelf respondsToSelector:commandSelector]) {
                     BlockAssert(NO, @"[UITestTunnelServer] Unhandled/unknown command! %@", command);
                 }
                 
                 IMP imp = [strongSelf methodForSelector:commandSelector];
+                
+                NSLog(@"[UITestTunnelServer] Executing command '%@'", command);
                 
                 NSDictionary * (*func)(id, SEL, GCDWebServerRequest *) = (void *)imp;
                 response = func(strongSelf, commandSelector, request);
@@ -164,19 +164,24 @@ description:(desc), ##__VA_ARGS__]; \
         return;
     }
     
-    NSError *serverError = nil;
     NSDictionary *serverOptions = [NSMutableDictionary dictionary];
     
     [serverOptions setValue:bonjourName forKey:GCDWebServerOption_BonjourName];
     [serverOptions setValue:@"_http._tcp." forKey:GCDWebServerOption_BonjourType];
-    
     [GCDWebServer setLogLevel:3];
+    
+    NSLog(@"[SBTUITestTunnel] Starting server with bonjour name: %@", bonjourName);
+    
+    NSError *serverError = nil;
     if (![self.server startWithOptions:serverOptions error:&serverError]) {
         BlockAssert(NO, @"[UITestTunnelServer] Failed to start server. %@", serverError.description);
         return;
     }
     
-    [self processStartupCommandsIfNeeded];
+    if (dispatch_semaphore_wait(self.launchSemaphore, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(SBTUITunneledServerDefaultTimeout * NSEC_PER_SEC))) != 0) {
+        BlockAssert(NO, @"[UITestTunnelServer] Fail waiting for launch semaphore");
+        return;
+    }
     
     NSLog(@"[UITestTunnelServer] Up and running!");
 }
@@ -490,60 +495,8 @@ description:(desc), ##__VA_ARGS__]; \
 
 - (NSDictionary *)commandNSUserDefaultsReset:(GCDWebServerRequest *)tunnelRequest
 {
-    resetUserDefaults();
-    
-    return @{ SBTUITunnelResponseResultKey: @"YES" };
-}
-
-#pragma mark - Keychain Commands
-
-- (NSDictionary *)commandKeychainSetObject:(GCDWebServerRequest *)tunnelRequest
-{
-    NSString *objKey = tunnelRequest.parameters[SBTUITunnelObjectKeyKey];
-    NSData *objData = [[NSData alloc] initWithBase64EncodedString:tunnelRequest.parameters[SBTUITunnelObjectKey] options:0];
-    id obj = [NSKeyedUnarchiver unarchiveObjectWithData:objData];
-    
-    NSString *ret = @"NO";
-    if (obj && objKey) {
-        ret = [[FXKeychain defaultKeychain] setObject:obj forKey:objKey] ? @"YES" : @"NO";
-    }
-    
-    return @{ SBTUITunnelResponseResultKey: ret };
-}
-
-- (NSDictionary *)commandKeychainRemoveObject:(GCDWebServerRequest *)tunnelRequest
-{
-    NSString *objKey = tunnelRequest.parameters[SBTUITunnelObjectKeyKey];
-    
-    NSString *ret = @"NO";
-    if (objKey) {
-        ret = [[FXKeychain defaultKeychain] removeObjectForKey:objKey] ? @"YES" : @"NO";
-    }
-    
-    return @{ SBTUITunnelResponseResultKey: ret };
-}
-
-- (NSDictionary *)commandKeychainObject:(GCDWebServerRequest *)tunnelRequest
-{
-    NSString *objKey = tunnelRequest.parameters[SBTUITunnelObjectKeyKey];
-    
-    NSObject *obj = [[FXKeychain defaultKeychain] objectForKey:objKey];
-    NSData *data = [NSKeyedArchiver archivedDataWithRootObject:obj];
-    NSString *ret = @"";
-    if (data) {
-        ret = [data base64EncodedStringWithOptions:0];
-    }
-    
-    return @{ SBTUITunnelResponseResultKey: ret ?: @"" };
-}
-
-- (NSDictionary *)commandKeychainReset:(GCDWebServerRequest *)tunnelRequest
-{
-    deleteAllKeysForSecClass(kSecClassGenericPassword);
-    deleteAllKeysForSecClass(kSecClassInternetPassword);
-    deleteAllKeysForSecClass(kSecClassCertificate);
-    deleteAllKeysForSecClass(kSecClassKey);
-    deleteAllKeysForSecClass(kSecClassIdentity);
+    [[NSUserDefaults standardUserDefaults] removePersistentDomainForName:[[NSBundle mainBundle] bundleIdentifier]];
+    [[NSUserDefaults standardUserDefaults] synchronize];
     
     return @{ SBTUITunnelResponseResultKey: @"YES" };
 }
@@ -657,9 +610,7 @@ description:(desc), ##__VA_ARGS__]; \
 
 - (NSDictionary *)commandStartupCompleted:(GCDWebServerRequest *)tunnelRequest
 {
-    [self.startupCommandsCompletedLock lock];
-    self.startupCommandsCompleted = YES;
-    [self.startupCommandsCompletedLock unlock];
+    dispatch_semaphore_signal(self.launchSemaphore);
     
     return @{ SBTUITunnelResponseResultKey: @"YES" };
 }
@@ -699,26 +650,12 @@ description:(desc), ##__VA_ARGS__]; \
 - (void)processLaunchOptionsIfNeeded
 {
     if ([[NSProcessInfo processInfo].arguments containsObject:SBTUITunneledApplicationLaunchOptionResetFilesystem]) {
-        deleteAppData();
+        [self deleteAppData];
         [self commandNSUserDefaultsReset:nil];
-        [self commandKeychainReset:nil];
     }
     if ([[NSProcessInfo processInfo].arguments containsObject:SBTUITunneledApplicationLaunchOptionDisableUITextFieldAutocomplete]) {
         [UITextField disableAutocompleteOnce];
     }
-}
-
-- (void)processStartupCommandsIfNeeded
-{
-    BOOL localStartupCommandsCompleted = NO;
-    do {
-        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
-        [self.startupCommandsCompletedLock lock];
-        localStartupCommandsCompleted = _startupCommandsCompleted;
-        [self.startupCommandsCompletedLock unlock];
-    } while (!localStartupCommandsCompleted);
-    
-    NSLog(@"[UITestTunnelServer] Startup commands completed");
 }
 
 - (NSString *)identifierForStubRequest:(GCDWebServerRequest *)tunnelRequest
@@ -818,7 +755,7 @@ description:(desc), ##__VA_ARGS__]; \
 #pragma mark - Helper Functions
 
 // https://gist.github.com/michalzelinka/67adfa0142767575194f
-void deleteAppData() {
+- (void)deleteAppData {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSArray<NSString *> *folders = @[[NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) firstObject],
                                      [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject],
@@ -832,19 +769,6 @@ void deleteAppData() {
         }
     }
 }
-
-void resetUserDefaults() {
-    [[NSUserDefaults standardUserDefaults] removePersistentDomainForName:[[NSBundle mainBundle] bundleIdentifier]];
-    [[NSUserDefaults standardUserDefaults] synchronize];
-    
-    [NSUserDefaults resetStandardUserDefaults];
-}
-
-// http://stackoverflow.com/a/26191925/574449
-void (^deleteAllKeysForSecClass)(CFTypeRef) = ^(CFTypeRef secClass) {
-    id dict = @{(__bridge id)kSecClass: (__bridge id)secClass};
-    SecItemDelete((__bridge CFDictionaryRef) dict);
-};
 
 @end
 

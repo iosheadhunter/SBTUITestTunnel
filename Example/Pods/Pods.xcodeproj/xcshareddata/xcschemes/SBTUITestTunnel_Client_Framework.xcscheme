@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Scheme
-   LastUpgradeVersion = "0700"
+   LastUpgradeVersion = "0920"
    version = "1.3">
    <BuildAction
       parallelizeBuildables = "YES"
@@ -14,9 +14,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "7FA31324615410D33A5D484A5DD154F7"
-               BuildableName = "Pods_SBTUITestTunnel_Example.framework"
-               BlueprintName = "Pods-SBTUITestTunnel_Example"
+               BlueprintIdentifier = "C3796B1F1FE7C27A00BCF9DD"
+               BuildableName = "SBTUITestTunnel_Client_Framework.framework"
+               BlueprintName = "SBTUITestTunnel_Client_Framework"
                ReferencedContainer = "container:Pods.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -47,9 +47,9 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "7FA31324615410D33A5D484A5DD154F7"
-            BuildableName = "Pods_SBTUITestTunnel_Example.framework"
-            BlueprintName = "Pods-SBTUITestTunnel_Example"
+            BlueprintIdentifier = "C3796B1F1FE7C27A00BCF9DD"
+            BuildableName = "SBTUITestTunnel_Client_Framework.framework"
+            BlueprintName = "SBTUITestTunnel_Client_Framework"
             ReferencedContainer = "container:Pods.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
@@ -62,12 +62,21 @@
       savedToolIdentifier = ""
       useCustomWorkingDirectory = "NO"
       debugDocumentVersioning = "YES">
+      <MacroExpansion>
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "C3796B1F1FE7C27A00BCF9DD"
+            BuildableName = "SBTUITestTunnel_Client_Framework.framework"
+            BlueprintName = "SBTUITestTunnel_Client_Framework"
+            ReferencedContainer = "container:Pods.xcodeproj">
+         </BuildableReference>
+      </MacroExpansion>
    </ProfileAction>
    <AnalyzeAction
       buildConfiguration = "Debug">
    </AnalyzeAction>
    <ArchiveAction
-      buildConfiguration = "Release"
+      buildConfiguration = "Debug"
       revealArchiveInOrganizer = "YES">
    </ArchiveAction>
 </Scheme>
