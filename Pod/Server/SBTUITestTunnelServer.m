@@ -70,6 +70,7 @@ description:(desc), ##__VA_ARGS__]; \
 
 @property (nonatomic, strong) GCDWebServer *server;
 @property (nonatomic, strong) NSCountedSet<NSString *> *stubsToRemoveAfterCount;
+@property (nonatomic, strong) NSCountedSet<NSString *> *cookieBlockToRemoveAfterCount;
 @property (nonatomic, strong) NSMutableArray<SBTMonitoredNetworkRequest *> *monitoredRequests;
 @property (nonatomic, strong) dispatch_queue_t commandDispatchQueue;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, void (^)(NSObject *)> *customCommands;
@@ -91,10 +92,13 @@ static NSTimeInterval SBTUITunneledServerDefaultTimeout = 60.0;
         sharedInstance = [[SBTUITestTunnelServer alloc] init];
         sharedInstance.server = [[GCDWebServer alloc] init];
         sharedInstance.stubsToRemoveAfterCount = [NSCountedSet set];
+        sharedInstance.cookieBlockToRemoveAfterCount = [NSCountedSet set];
         sharedInstance.monitoredRequests = [NSMutableArray array];
         sharedInstance.commandDispatchQueue = dispatch_queue_create("com.sbtuitesttunnel.queue.command", DISPATCH_QUEUE_SERIAL);
         sharedInstance.cruising = YES;
         sharedInstance.launchSemaphore = dispatch_semaphore_create(0);
+        
+        [NSURLProtocol registerClass:[SBTProxyURLProtocol class]];
     });
     return sharedInstance;
 }
@@ -117,8 +121,6 @@ static NSTimeInterval SBTUITunneledServerDefaultTimeout = 60.0;
         NSLog(@"[UITestTunnelServer] required environment parameters missing, safely landing");
         return;
     }
-    
-    [NSURLProtocol registerClass:[SBTProxyURLProtocol class]];
     
     Class requestClass = ([SBTUITunnelHTTPMethod isEqualToString:@"POST"]) ? [GCDWebServerURLEncodedFormRequest class] : [GCDWebServerRequest class];
     
@@ -251,7 +253,14 @@ static NSTimeInterval SBTUITunneledServerDefaultTimeout = 60.0;
         NSData *requestMatchData = [[NSData alloc] initWithBase64EncodedString:tunnelRequest.parameters[SBTUITunnelStubQueryRuleKey] options:0];
         requestMatch = [NSKeyedUnarchiver unarchiveObjectWithData:requestMatchData];
         
-        SBTProxyStubResponse *response = [self responseForStubRequest:tunnelRequest];
+        SBTProxyStubResponse *response;
+        NSInteger failWithCustomErrorCode = [tunnelRequest.parameters[SBTUITunnelStubQueryFailWithCustomErrorKey] integerValue];
+        if (failWithCustomErrorCode != 0) {
+            NSTimeInterval responseTime = [tunnelRequest.parameters[SBTUITunnelStubQueryResponseTimeKey] doubleValue];
+            response = [SBTProxyStubResponse failureWithCustomErrorCode:failWithCustomErrorCode responseTime:responseTime];
+        } else {
+            response = [self responseForStubRequest:tunnelRequest];
+        }
         NSString *requestIdentifier = [self identifierForStubRequest:tunnelRequest];
         
         __weak typeof(self)weakSelf = self;
@@ -368,20 +377,29 @@ static NSTimeInterval SBTUITunneledServerDefaultTimeout = 60.0;
     __block NSArray *requestsToPeek = @[];
     
     __weak typeof(self)weakSelf = self;
-    dispatch_async(dispatch_get_main_queue(), ^{
+    void (^monitorBlock)(void) = ^{
         __strong typeof(weakSelf)strongSelf = weakSelf;
         
-        // we use main thread to synchronize access to self.monitoredRequests
         requestsToPeek = [strongSelf.monitoredRequests copy];
         
         NSData *data = [NSKeyedArchiver archivedDataWithRootObject:requestsToPeek];
         if (data) {
             ret = [data base64EncodedStringWithOptions:0];
         }
-        dispatch_semaphore_signal(sem);
-    });
+    };
     
-    dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+    if ([tunnelRequest.parameters[SBTUITunnelLocalExecutionKey] boolValue]) {
+        monitorBlock();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            // we use main thread to synchronize access to self.monitoredRequests
+            monitorBlock();
+            
+            dispatch_semaphore_signal(sem);
+        });
+        
+        dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+    }
     
     NSString *debugInfo = [NSString stringWithFormat:@"Found %ld monitored requests", (unsigned long)requestsToPeek.count];
     return @{ SBTUITunnelResponseResultKey: ret ?: @"", SBTUITunnelResponseDebugKey: debugInfo ?: @"" };
@@ -393,10 +411,9 @@ static NSTimeInterval SBTUITunneledServerDefaultTimeout = 60.0;
     
     __block NSString *ret = @"";
     __block NSArray *requestsToFlush = @[];
-    
+
     __weak typeof(self)weakSelf = self;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        // we use main thread to synchronize access to self.monitoredRequests
+    void (^flushBlock)(void) = ^{
         __strong typeof(weakSelf)strongSelf = weakSelf;
         
         requestsToFlush = [strongSelf.monitoredRequests copy];
@@ -406,10 +423,20 @@ static NSTimeInterval SBTUITunneledServerDefaultTimeout = 60.0;
         if (data) {
             ret = [data base64EncodedStringWithOptions:0];
         }
-        dispatch_semaphore_signal(sem);
-    });
+    };
     
-    dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+    if ([tunnelRequest.parameters[SBTUITunnelLocalExecutionKey] boolValue]) {
+        flushBlock();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            // we use main thread to synchronize access to self.monitoredRequests
+            flushBlock();
+            
+            dispatch_semaphore_signal(sem);
+        });
+        
+        dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+    }
     
     NSString *debugInfo = [NSString stringWithFormat:@"Found %ld monitored requests", (unsigned long)requestsToFlush.count];
     return @{ SBTUITunnelResponseResultKey: ret ?: @"", SBTUITunnelResponseDebugKey: debugInfo ?: @"" };
@@ -445,6 +472,72 @@ static NSTimeInterval SBTUITunneledServerDefaultTimeout = 60.0;
 - (NSDictionary *)commandThrottlesRemoveAll:(GCDWebServerRequest *)tunnelRequest
 {
     [SBTProxyURLProtocol proxyRequestsRemoveAll];
+    
+    return @{ SBTUITunnelResponseResultKey: @"YES" };
+}
+
+#pragma mark - Cookie Block Commands
+
+- (NSDictionary *)commandCookiesBlockMatching:(GCDWebServerRequest *)tunnelRequest
+{
+    __block NSString *cookieBlockId = @"";
+    SBTRequestMatch *requestMatch = nil;
+    
+    if ([self validCookieBlockRequest:tunnelRequest]) {
+        NSData *requestMatchData = [[NSData alloc] initWithBase64EncodedString:tunnelRequest.parameters[SBTUITunnelStubQueryRuleKey] options:0];
+        requestMatch = [NSKeyedUnarchiver unarchiveObjectWithData:requestMatchData];
+        
+        NSString *requestIdentifier = [self identifierForCookieBlockRequest:tunnelRequest];
+        
+        __weak typeof(self)weakSelf = self;
+        cookieBlockId = [SBTProxyURLProtocol cookieBlockRequestsMatching:requestMatch didBlockCookieInRequest:^(NSURLRequest *request) {
+            __strong typeof(weakSelf)strongSelf = weakSelf;
+            
+            if ([strongSelf.cookieBlockToRemoveAfterCount containsObject:requestIdentifier]) {
+                [strongSelf.cookieBlockToRemoveAfterCount removeObject:requestIdentifier];
+                
+                if ([strongSelf.cookieBlockToRemoveAfterCount countForObject:requestIdentifier] == 0) {
+                    [SBTProxyURLProtocol cookieBlockRequestsRemoveWithId:cookieBlockId];
+                }
+            }
+        }];
+    }
+    
+    return @{ SBTUITunnelResponseResultKey: cookieBlockId ?: @"", SBTUITunnelResponseDebugKey: [requestMatch description] ?: @"" };
+}
+
+#pragma mark - Cookie Block Remove Commands
+
+- (NSDictionary *)commandCookiesBlockAndRemoveMatching:(GCDWebServerRequest *)tunnelRequest
+{
+    NSDictionary *ret = @{ SBTUITunnelResponseResultKey: @"NO" };
+    NSInteger cookieBlockRemoveAfterCount = 0;
+    
+    if ([self validCookieBlockRequest:tunnelRequest]) {
+        cookieBlockRemoveAfterCount = [tunnelRequest.parameters[SBTUITunnelCookieBlockQueryIterations] integerValue];
+        
+        for (NSInteger i = 0; i < cookieBlockRemoveAfterCount; i++) {
+            [self.cookieBlockToRemoveAfterCount addObject:[self identifierForCookieBlockRequest:tunnelRequest]];
+        }
+        
+        ret = [self commandCookiesBlockMatching:tunnelRequest];
+    }
+    
+    return ret;
+}
+
+- (NSDictionary *)commandCookiesBlockRemove:(GCDWebServerRequest *)tunnelRequest
+{
+    NSData *responseData = [[NSData alloc] initWithBase64EncodedString:tunnelRequest.parameters[SBTUITunnelCookieBlockQueryRuleKey] options:0];
+    NSString *reqId = [NSKeyedUnarchiver unarchiveObjectWithData:responseData];
+    
+    NSString *ret = [SBTProxyURLProtocol cookieBlockRequestsRemoveWithId:reqId] ? @"YES" : @"NO";
+    return @{ SBTUITunnelResponseResultKey: ret };
+}
+
+- (NSDictionary *)commandCookiesBlockRemoveAll:(GCDWebServerRequest *)tunnelRequest
+{
+    [SBTProxyURLProtocol cookieBlockRequestsRemoveAll];
     
     return @{ SBTUITunnelResponseResultKey: @"YES" };
 }
@@ -672,6 +765,20 @@ static NSTimeInterval SBTUITunneledServerDefaultTimeout = 60.0;
     return [@"stub-" stringByAppendingString:[jsonData SHA1]];
 }
 
+- (NSString *)identifierForCookieBlockRequest:(GCDWebServerRequest *)tunnelRequest
+{
+    NSArray<NSString *> *components = @[tunnelRequest.parameters[SBTUITunnelCookieBlockQueryRuleKey]];
+    NSError *error = nil;
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:components options:NSJSONWritingPrettyPrinted error:&error];
+    
+    if (!jsonData || error) {
+        NSLog(@"[UITestTunnelServer] Failed to create identifierForCookieBlockRequest");
+        return nil;
+    }
+    
+    return [@"cookie_block-" stringByAppendingString:[jsonData SHA1]];
+}
+
 - (SBTProxyStubResponse *)responseForStubRequest:(GCDWebServerRequest *)tunnelRequest
 {
     NSData *responseArchivedData = [[NSData alloc] initWithBase64EncodedString:tunnelRequest.parameters[SBTUITunnelStubQueryReturnDataKey] options:0];
@@ -751,6 +858,16 @@ static NSTimeInterval SBTUITunneledServerDefaultTimeout = 60.0;
     return YES;
 }
 
+- (BOOL)validCookieBlockRequest:(GCDWebServerRequest *)tunnelRequest
+{
+    if (![[NSData alloc] initWithBase64EncodedString:tunnelRequest.parameters[SBTUITunnelCookieBlockQueryRuleKey] options:0]) {
+        NSLog(@"[UITestTunnelServer] Invalid cookieBlockRequest received!");
+        
+        return NO;
+    }
+    
+    return YES;
+}
 
 #pragma mark - Helper Functions
 
@@ -768,6 +885,39 @@ static NSTimeInterval SBTUITunneledServerDefaultTimeout = 60.0;
             [fm removeItemAtPath:[folder stringByAppendingPathComponent:file] error:&error];
         }
     }
+}
+
+#pragma mark - Connectionless
+
++ (NSString *)performCommand:(NSString *)commandName params:(NSDictionary<NSString *, NSString *> *)params
+{
+    NSString *commandString = [commandName stringByAppendingString:@":"];
+    SEL commandSelector = NSSelectorFromString(commandString);
+    
+    NSMutableDictionary *unescapedParams = [params mutableCopy];
+    for (NSString *key in params) {
+        unescapedParams[key] = [unescapedParams[key] stringByRemovingPercentEncoding];
+    }
+    unescapedParams[SBTUITunnelLocalExecutionKey] = @(YES);
+    
+    GCDWebServerRequest *request = [[GCDWebServerRequest alloc] initWithMethod:@"POST" url:[NSURL URLWithString:@""] headers:@{} path:commandName query:unescapedParams];
+    
+    NSDictionary *response = nil;
+    
+    if (![self.sharedInstance processCustomCommandIfNecessary:request returnObject:&response]) {
+        if (![self.sharedInstance respondsToSelector:commandSelector]) {
+            NSAssert(NO, @"[UITestTunnelServer] Unhandled/unknown command! %@", commandName);
+        }
+        
+        IMP imp = [self.sharedInstance methodForSelector:commandSelector];
+        
+        NSLog(@"[UITestTunnelServer] Executing command '%@'", commandName);
+        
+        NSDictionary * (*func)(id, SEL, GCDWebServerRequest *) = (void *)imp;
+        response = func(self.sharedInstance, commandSelector, request);
+    }
+    
+    return response[SBTUITunnelResponseResultKey];
 }
 
 @end

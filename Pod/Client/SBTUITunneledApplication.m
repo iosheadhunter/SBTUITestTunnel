@@ -41,6 +41,7 @@ const NSString *SBTUITunnelJsonMimeType = @"application/json";
 @property (nonatomic, strong) void (^startupBlock)(void);
 @property (nonatomic, copy) NSArray <NSString *> *initialLaunchArguments;
 @property (nonatomic, copy) NSDictionary <NSString *, NSString *> *initialLaunchEnvironment;
+@property (nonatomic, strong) NSString *(^connectionlessBlock)(NSString *, NSDictionary<NSString *, NSString *> *);
 
 @end
 
@@ -120,6 +121,11 @@ static NSTimeInterval SBTUITunneledApplicationDefaultTimeout = 30.0;
     [self launch];
     
     [self waitForAppReady];
+}
+
+- (void)launchConnectionless:(NSString * (^)(NSString *, NSDictionary<NSString *, NSString *> *))command
+{
+    self.connectionlessBlock = command;
 }
 
 - (void)waitForAppReady
@@ -216,9 +222,11 @@ static NSTimeInterval SBTUITunneledApplicationDefaultTimeout = 30.0;
                                                      SBTUITunnelStubQueryMimeTypeKey: response.contentType,
                                                      SBTUITunnelStubQueryReturnHeadersKey: headersSerialized,
                                                      SBTUITunnelStubQueryResponseTimeKey: [@(response.responseTime) stringValue],
-                                                     SBTUITunnelStubQueryIterations: [@(iterations) stringValue]};
+                                                     SBTUITunnelStubQueryIterations: [@(iterations) stringValue],
+                                                     SBTUITunnelStubQueryFailWithCustomErrorKey: [@(response.failureCode) stringValue]
+                                                     };
     
-    return [self sendSynchronousRequestWithPath:SBTUITunneledApplicationcommandStubAndRemovePathMatching params:params];
+    return [self sendSynchronousRequestWithPath:SBTUITunneledApplicationCommandStubAndRemovePathMatching params:params];
 }
 
 #pragma mark - Stub Remove Commands
@@ -242,7 +250,7 @@ static NSTimeInterval SBTUITunneledApplicationDefaultTimeout = 30.0;
 
 - (BOOL)stubRequestsRemoveAll
 {
-    return [[self sendSynchronousRequestWithPath:SBTUITunneledApplicationcommandStubRequestsRemoveAll params:nil] boolValue];
+    return [[self sendSynchronousRequestWithPath:SBTUITunneledApplicationCommandStubRequestsRemoveAll params:nil] boolValue];
 }
 
 #pragma mark - Monitor Requests Commands
@@ -256,7 +264,7 @@ static NSTimeInterval SBTUITunneledApplicationDefaultTimeout = 30.0;
 
 - (NSArray<SBTMonitoredNetworkRequest *> *)monitoredRequestsPeekAll;
 {
-    NSString *objectBase64 = [self sendSynchronousRequestWithPath:SBTUITunneledApplicationcommandMonitorPeek params:nil];
+    NSString *objectBase64 = [self sendSynchronousRequestWithPath:SBTUITunneledApplicationCommandMonitorPeek params:nil];
     if (objectBase64) {
         NSData *objectData = [[NSData alloc] initWithBase64EncodedString:objectBase64 options:0];
         
@@ -268,7 +276,7 @@ static NSTimeInterval SBTUITunneledApplicationDefaultTimeout = 30.0;
 
 - (NSArray<SBTMonitoredNetworkRequest *> *)monitoredRequestsFlushAll;
 {
-    NSString *objectBase64 = [self sendSynchronousRequestWithPath:SBTUITunneledApplicationcommandMonitorFlush params:nil];
+    NSString *objectBase64 = [self sendSynchronousRequestWithPath:SBTUITunneledApplicationCommandMonitorFlush params:nil];
     if (objectBase64) {
         NSData *objectData = [[NSData alloc] initWithBase64EncodedString:objectBase64 options:0];
         
@@ -297,7 +305,7 @@ static NSTimeInterval SBTUITunneledApplicationDefaultTimeout = 30.0;
 
 - (BOOL)monitorRequestRemoveAll
 {
-    return [[self sendSynchronousRequestWithPath:SBTUITunneledApplicationcommandMonitorRemoveAll params:nil] boolValue];
+    return [[self sendSynchronousRequestWithPath:SBTUITunneledApplicationCommandMonitorRemoveAll params:nil] boolValue];
 }
 
 #pragma mark - Asynchronously Wait for Requests Commands
@@ -413,7 +421,44 @@ static NSTimeInterval SBTUITunneledApplicationDefaultTimeout = 30.0;
 
 - (BOOL)throttleRequestRemoveAll
 {
-    return [[self sendSynchronousRequestWithPath:SBTUITunneledApplicationcommandThrottleRemoveAll params:nil] boolValue];
+    return [[self sendSynchronousRequestWithPath:SBTUITunneledApplicationCommandThrottleRemoveAll params:nil] boolValue];
+}
+
+#pragma mark - Cookie Block Requests Commands
+
+- (NSString *)blockCookiesInRequestsMatching:(SBTRequestMatch *)match
+{
+    return [self blockCookiesInRequestsMatching:match iterations:0];
+}
+
+- (NSString *)blockCookiesInRequestsMatching:(SBTRequestMatch *)match iterations:(NSUInteger)iterations
+{
+    NSDictionary<NSString *, NSString *> *params = @{SBTUITunnelCookieBlockQueryRuleKey: [self base64SerializeObject:match],
+                                                     SBTUITunnelCookieBlockQueryIterations: [@(iterations) stringValue]};
+    
+    return [self sendSynchronousRequestWithPath:SBTUITunneledApplicationCommandCookieBlockAndRemoveMatching params:params];
+}
+
+- (BOOL)blockCookiesRequestsRemoveWithId:(NSString *)reqId
+{
+    NSDictionary<NSString *, NSString *> *params = @{SBTUITunnelCookieBlockQueryRuleKey:[self base64SerializeObject:reqId]};
+    
+    return [[self sendSynchronousRequestWithPath:SBTUITunneledApplicationCommandCookieBlockRemove params:params] boolValue];
+}
+
+- (BOOL)blockCookiesRequestsRemoveWithIds:(NSArray<NSString *> *)reqIds
+{
+    BOOL ret = YES;
+    for (NSString *reqId in reqIds) {
+        ret &= [self blockCookiesRequestsRemoveWithId:reqId];
+    }
+    
+    return ret;
+}
+
+- (BOOL)blockCookiesRequestsRemoveAll
+{
+    return [[self sendSynchronousRequestWithPath:SBTUITunneledApplicationCommandCookieBlockRemoveAll params:nil] boolValue];
 }
 
 #pragma mark - NSUserDefaults Commands
@@ -559,6 +604,10 @@ static NSTimeInterval SBTUITunneledApplicationDefaultTimeout = 30.0;
 
 - (NSString *)sendSynchronousRequestWithPath:(NSString *)path params:(NSDictionary<NSString *, NSString *> *)params assertOnError:(BOOL)assertOnError
 {
+    if (self.connectionlessBlock) {
+        return self.connectionlessBlock(path, params);
+    }
+    
     if (self.connectionPort == 0) {
         return nil; // connection still not established
     }

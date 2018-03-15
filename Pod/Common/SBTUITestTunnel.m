@@ -47,9 +47,15 @@ NSString * const SBTUITunnelStubQueryReturnHeadersKey = @"ret_headers";
 NSString * const SBTUITunnelStubQueryIterations = @"iterations";
 NSString * const SBTUITunnelStubQueryResponseTimeKey = @"time_response";
 NSString * const SBTUITunnelStubQueryMimeTypeKey = @"mime_type";
+NSString * const SBTUITunnelStubQueryFailWithCustomErrorKey = @"fail_w_error";
+
+NSString * const SBTUITunnelLocalExecutionKey = @"local_exec";
 
 NSString * const SBTUITunnelProxyQueryRuleKey = @"rule";
 NSString * const SBTUITunnelProxyQueryResponseTimeKey = @"time_response";
+
+NSString * const SBTUITunnelCookieBlockQueryRuleKey = @"rule";
+NSString * const SBTUITunnelCookieBlockQueryIterations = @"iterations";
 
 NSString * const SBTUITunnelObjectKey = @"obj";
 NSString * const SBTUITunnelObjectKeyKey = @"key";
@@ -72,19 +78,23 @@ NSString * const SBTUITunneledApplicationCommandQuit = @"commandQuit";
 NSString * const SBTUITunneledApplicationCommandCruising = @"commandCruising";
 
 NSString * const SBTUITunneledApplicationCommandStubPathMatching = @"commandStubPathMatching";
-NSString * const SBTUITunneledApplicationcommandStubAndRemovePathMatching = @"commandStubAndRemovePathMatching";
+NSString * const SBTUITunneledApplicationCommandStubAndRemovePathMatching = @"commandStubAndRemovePathMatching";
 NSString * const SBTUITunneledApplicationCommandstubRequestsRemove = @"commandStubRequestsRemove";
-NSString * const SBTUITunneledApplicationcommandStubRequestsRemoveAll = @"commandStubRequestsRemoveAll";
+NSString * const SBTUITunneledApplicationCommandStubRequestsRemoveAll = @"commandStubRequestsRemoveAll";
 
 NSString * const SBTUITunneledApplicationCommandMonitorPathMatching = @"commandMonitorPathMatching";
 NSString * const SBTUITunneledApplicationCommandMonitorRemove = @"commandMonitorRemove";
-NSString * const SBTUITunneledApplicationcommandMonitorRemoveAll = @"commandMonitorsRemoveAll";
-NSString * const SBTUITunneledApplicationcommandMonitorPeek = @"commandMonitorPeek";
-NSString * const SBTUITunneledApplicationcommandMonitorFlush = @"commandMonitorFlush";
+NSString * const SBTUITunneledApplicationCommandMonitorRemoveAll = @"commandMonitorsRemoveAll";
+NSString * const SBTUITunneledApplicationCommandMonitorPeek = @"commandMonitorPeek";
+NSString * const SBTUITunneledApplicationCommandMonitorFlush = @"commandMonitorFlush";
 
 NSString * const SBTUITunneledApplicationCommandThrottlePathMatching = @"commandThrottlePathMatching";
 NSString * const SBTUITunneledApplicationCommandThrottleRemove = @"commandThrottleRemove";
-NSString * const SBTUITunneledApplicationcommandThrottleRemoveAll = @"commandThrottlesRemoveAll";
+NSString * const SBTUITunneledApplicationCommandThrottleRemoveAll = @"commandThrottlesRemoveAll";
+
+NSString * const SBTUITunneledApplicationCommandCookieBlockAndRemoveMatching = @"commandCookiesBlockAndRemoveMatching";
+NSString * const SBTUITunneledApplicationCommandCookieBlockRemove = @"commandCookiesBlockRemove";
+NSString * const SBTUITunneledApplicationCommandCookieBlockRemoveAll = @"commandCookiesBlockRemoveAll";
 
 NSString * const SBTUITunneledApplicationCommandNSUserDefaultsSetObject = @"commandNSUserDefaultsSetObject";
 NSString * const SBTUITunneledApplicationCommandNSUserDefaultsRemoveObject = @"commandNSUserDefaultsRemoveObject";
