@@ -25,21 +25,30 @@
 #import <Foundation/Foundation.h>
 #import "SBTRequestMatch.h"
 
-@class SBTProxyStubResponse;
+@class SBTStubResponse;
+@class SBTRewrite;
 
 @interface SBTProxyURLProtocol : NSURLProtocol
 
++ (void)reset;
+
 #pragma mark - Proxy Requests
 
-+ (nullable NSString *)proxyRequestsMatching:(nonnull SBTRequestMatch *)match delayResponse:(NSTimeInterval)delayResponseTime responseBlock:(nullable void(^)(NSURLRequest * __nullable, NSURLRequest * __nullable, NSHTTPURLResponse * __nullable , NSData * __nullable, NSTimeInterval, BOOL))block;
++ (nullable NSString *)proxyRequestsMatching:(nonnull SBTRequestMatch *)match delayResponse:(NSTimeInterval)delayResponseTime responseBlock:(nullable void(^)(NSURLRequest * __nullable, NSURLRequest * __nullable, NSHTTPURLResponse * __nullable , NSData * __nullable, NSTimeInterval, BOOL, BOOL))block;
 + (BOOL)proxyRequestsRemoveWithId:(nonnull NSString *)reqId;
 + (void)proxyRequestsRemoveAll;
 
 #pragma mark - Stubbing Requests
 
-+ (nullable NSString *)stubRequestsMatching:(nonnull SBTRequestMatch *)match stubResponse:(nonnull SBTProxyStubResponse *)stubResponse didStubRequest:(nullable void(^)(NSURLRequest * __nullable))block;
++ (nullable NSString *)stubRequestsMatching:(nonnull SBTRequestMatch *)match stubResponse:(nonnull SBTStubResponse *)stubResponse didStubRequest:(nullable void(^)(NSURLRequest * __nullable))block;
 + (BOOL)stubRequestsRemoveWithId:(nonnull NSString *)reqId;
 + (void)stubRequestsRemoveAll;
+
+#pragma mark - Rewrite Requests
+
++ (nullable NSString *)rewriteRequestsMatching:(nonnull SBTRequestMatch *)match rewrite:(nonnull SBTRewrite *)rewrite didRewriteRequest:(nullable void(^)(NSURLRequest * __nullable))block;
++ (BOOL)rewriteRequestsRemoveWithId:(nonnull NSString *)reqId;
++ (void)rewriteRequestsRemoveAll;
 
 #pragma mark - Cookie Block Requests
 

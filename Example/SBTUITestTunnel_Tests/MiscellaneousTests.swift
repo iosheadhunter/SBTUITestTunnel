@@ -30,17 +30,17 @@ class MiscellaneousTests: XCTestCase {
         
         XCTAssertEqual(randomString, app.userDefaultsObject(forKey: userDefaultsKey) as! String)
     }
-    
+
     func testStartupCommandsWaitsAppropriately() {
         let userDefaultsKey = "test_ud_key"
         let randomString = ProcessInfo.processInfo.globallyUniqueString
-        
+
         var startupBlockProcessed = false
-        
+
         app.launchTunnel() {
             self.app.userDefaultsSetObject(randomString as NSCoding & NSObjectProtocol, forKey: userDefaultsKey)
             self.app.setUserInterfaceAnimationsEnabled(false)
-            Thread.sleep(forTimeInterval: 15.0)
+            Thread.sleep(forTimeInterval: 8.0)
             startupBlockProcessed = true
         }
 
@@ -77,5 +77,33 @@ class MiscellaneousTests: XCTestCase {
         
         let delta = start.timeIntervalSinceNow
         XCTAssert(delta < -5.0)
+    }
+    
+    func testStubWithFilename() {
+        app.launchTunnel(withOptions: [SBTUITunneledApplicationLaunchOptionResetFilesystem])
+        
+        let requestMatch = SBTRequestMatch(url: "httpbin.org")
+        let response = SBTStubResponse(fileNamed: "test_file.json")
+        app.monitorRequests(matching: requestMatch)
+        app.stubRequests(matching: requestMatch, response: response)
+        
+        app.cells["executeDataTaskRequest"].tap()
+        
+        expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: app.textViews["result"], handler: nil)
+        waitForExpectations(timeout: 10.0, handler: nil)
+        
+        let result = app.textViews["result"].value as! String
+        let resultData = Data(base64Encoded: result)!
+        let resultDict = try! JSONSerialization.jsonObject(with: resultData, options: []) as! [String: Any]
+        
+        let networkBase64 = resultDict["data"] as! String
+        let networkString = String(data: Data(base64Encoded: networkBase64)!, encoding: .utf8)
+        
+        let monitoredRequests = app.monitoredRequestsFlushAll()
+        XCTAssertEqual(monitoredRequests.count, 1)
+        let responsetHeaders = monitoredRequests.first?.response?.allHeaderFields
+        
+        XCTAssertEqual(networkString, "{\"hello\":\"there\"}\n")
+        XCTAssertEqual(responsetHeaders!["Content-Type"] as? String, "application/json")
     }
 }
